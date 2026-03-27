@@ -1,5 +1,25 @@
 """
 instrumentation.py - Initialize OpenTelemetry before anything else
+
+LAB 2 — MISSING INSTRUMENTATION
+The TracerProvider, MeterProvider, and LoggerProvider are configured and
+exported to the LGTM stack. The SDK pipeline is healthy.
+
+However, the auto-instrumentation libraries (FastAPI, pymongo, httpx) have
+been intentionally removed. The manual spans in main.py have also been
+removed.
+
+Result: claims-service will appear healthy but generate zero spans. You
+will see the service in the service map only if other services call it,
+but there will be no visibility into what happens inside claims-service.
+
+Your tasks:
+  1. Re-add the auto-instrumentors below (FastAPIInstrumentor goes in main.py)
+  2. Add a manual span around the submit_claim handler in main.py
+  3. Add span attributes for claim.type, claim.amount, claim.status
+  4. Verify traces appear in Grafana Tempo
+
+Hint: auto-instrumentors must be called before the app starts handling requests.
 """
 import os
 import logging
@@ -15,14 +35,10 @@ from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-from opentelemetry.instrumentation.logging import LoggingInstrumentor
 
 OTLP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
 OTLP_HEADERS = os.getenv("OTEL_EXPORTER_OTLP_HEADERS", "")
 
-# Parse headers from comma-separated format: "key1=value1,key2=value2"
 headers = {}
 if OTLP_HEADERS:
     for header in OTLP_HEADERS.split(','):
@@ -61,15 +77,14 @@ logger_provider.add_log_record_processor(
     )
 )
 
-# Auto-instrumentations
-PymongoInstrumentor().instrument()
-HTTPXClientInstrumentor().instrument()
-LoggingInstrumentor().instrument(set_logging_format=True)
+# LAB 2: Auto-instrumentations REMOVED — add them back!
+# TODO: PymongoInstrumentor().instrument()
+# TODO: HTTPXClientInstrumentor().instrument()
+# TODO: LoggingInstrumentor().instrument(set_logging_format=True)
 
-# Inject traceId/spanId into Python logs and bridge to OTel
 handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 logging.getLogger().addHandler(handler)
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] [traceId=%(otelTraceID)s spanId=%(otelSpanID)s] %(message)s",
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
