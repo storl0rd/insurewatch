@@ -1,0 +1,40 @@
+# collector/skeleton.yml — LAB 3 STARTING POINT
+#
+# Your task: complete this config so the OTel Collector receives telemetry
+# from all InsureWatch services and forwards it to the LGTM stack.
+#
+# The collector container is already running (see docker-compose.yml).
+# Services are already configured to send to http://collector:4318.
+# But the collector has no valid pipeline — nothing will flow through.
+#
+# Steps:
+#   1. Define an OTLP receiver on port 4317 (gRPC) and 4318 (HTTP)
+#   2. Add a memory_limiter processor (must be first in pipeline)
+#   3. Add a batch processor
+#   4. Define an OTLP/HTTP exporter pointing to http://lgtm:4318
+#   5. Wire them into traces, metrics, and logs pipelines
+#   6. Restart the collector: docker compose restart collector
+#   7. Submit a claim in the UI and verify traces appear in Grafana
+#
+# Hint: receiver and exporter names cannot be the same.
+# Use "otlp" for the receiver, "otlphttp" for the exporter.
+
+receivers:
+  # TODO: define otlp receiver
+  # otlp:
+  #   protocols:
+  #     grpc: ...
+  #     http: ...
+
+processors:
+  # TODO: memory_limiter must be first
+  # TODO: batch processor
+
+exporters:
+  # TODO: forward to lgtm backend
+  # otlphttp/lgtm:
+  #   endpoint: ...
+
+service:
+  pipelines:
+    # TODO: wire receivers -> processors -> exporters for traces, metrics, logs
