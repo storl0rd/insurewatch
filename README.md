@@ -37,6 +37,15 @@ All services export traces, metrics, and logs via OTLP to the local Grafana LGTM
 | chaos-controller | Node.js / Express | 3004 |
 | frontend | React / Vite | 5173 |
 
+## Infrastructure (managed by docker-compose)
+
+| Container | Image | Purpose |
+|---|---|---|
+| `mongodb` | mongo:7 | Persistent store for claims, policies, and investments |
+| `lgtm` | grafana/otel-lgtm | Grafana UI + Tempo (traces) + Prometheus (metrics) + Loki (logs) |
+
+`claims-service`, `policy-service`, and `investment-service` all connect to MongoDB at `mongodb://mongodb:27017`. The `MONGODB_URL` environment variable is set in `docker-compose.yml` — no local MongoDB install required.
+
 ## Quick Start
 
 **Requirements:** Docker Desktop (with Compose), ~4 GB RAM
