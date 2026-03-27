@@ -1,5 +1,16 @@
 """
 instrumentation.py - Initialize OpenTelemetry before anything else
+
+LAB 1 — PROPAGATION MISMATCH
+This version configures the B3 propagator instead of W3C TraceContext.
+The api-gateway and policy-service use W3C TraceContext (traceparent header).
+B3 uses different headers (X-B3-TraceId, X-B3-SpanId, X-B3-Sampled).
+
+Result: the trace from api-gateway will NOT continue into claims-service.
+Spans from this service will appear as separate, disconnected root spans
+in your backend. The trace is broken at the api-gateway → claims boundary.
+
+Your task: find the propagator mismatch and fix it.
 """
 import os
 import logging
@@ -18,6 +29,8 @@ from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
+from opentelemetry.propagators.b3 import B3MultiFormat
+from opentelemetry.propagate import set_global_textmap
 
 OTLP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
 OTLP_HEADERS = os.getenv("OTEL_EXPORTER_OTLP_HEADERS", "")
@@ -36,6 +49,9 @@ resource = Resource.create({
     "deployment.environment": os.getenv("ENVIRONMENT", "production"),
     "service.language": "python",
 })
+
+# LAB 1 BUG: B3 propagator — incompatible with W3C TraceContext used by other services
+set_global_textmap(B3MultiFormat())
 
 # Traces
 tracer_provider = TracerProvider(resource=resource)
