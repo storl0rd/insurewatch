@@ -1,0 +1,174 @@
+version: "3.9"
+
+# InsureWatch — local lab environment
+# Grafana LGTM stack on host port 3100 (avoids conflict with api-gateway on 3000)
+# OTLP gRPC: 4317 | OTLP HTTP: 4318 | Grafana UI: 3100
+
+services:
+  # ── Observability stack ──────────────────────────────────────────────────────
+  lgtm:
+    image: grafana/otel-lgtm:latest
+    container_name: insurewatch-lgtm
+    ports:
+      - "3100:3000"   # Grafana UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - lgtm-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Database ─────────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    container_name: insurewatch-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── api-gateway (Node.js, port 3000) ─────────────────────────────────────────
+  api-gateway:
+    build: ./api-gateway
+    container_name: insurewatch-api-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - CLAIMS_SERVICE_URL=http://claims-service:3001
+      - POLICY_SERVICE_URL=http://policy-service:8080
+      - INVESTMENT_SERVICE_URL=http://investment-service:3002
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3003
+      - CHAOS_CONTROLLER_URL=http://chaos-controller:3004
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_SERVICE_NAME=api-gateway
+    depends_on:
+      lgtm:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── claims-service (Python/FastAPI, port 3001) ───────────────────────────────
+  claims-service:
+    build: ./claims-service
+    container_name: insurewatch-claims
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - MONGODB_URL=mongodb://mongodb:27017
+      - POLICY_SERVICE_URL=http://policy-service:8080
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3003
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_SERVICE_NAME=claims-service
+      - ENVIRONMENT=local
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      lgtm:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── policy-service (Java/Spring Boot, port 8080) ─────────────────────────────
+  policy-service:
+    build: ./policy-service
+    container_name: insurewatch-policy
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - MONGODB_URL=mongodb://mongodb:27017/insurewatch
+      - MONGO_DATABASE=insurewatch
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_SERVICE_NAME=policy-service
+      - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      lgtm:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── investment-service (Node.js, port 3002) ───────────────────────────────────
+  investment-service:
+    build: ./investment-service
+    container_name: insurewatch-investment
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - MONGODB_URL=mongodb://mongodb:27017/insurewatch
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_SERVICE_NAME=investment-service
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      lgtm:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── notification-service (Python/FastAPI, port 3003) ─────────────────────────
+  notification-service:
+    build: ./notification-service
+    container_name: insurewatch-notification
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_SERVICE_NAME=notification-service
+      - ENVIRONMENT=local
+    depends_on:
+      lgtm:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── chaos-controller (Node.js, port 3004) ────────────────────────────────────
+  chaos-controller:
+    build: ./chaos-controller
+    container_name: insurewatch-chaos
+    ports:
+      - "3004:3004"
+    environment:
+      - PORT=3004
+      - CLAIMS_SERVICE_URL=http://claims-service:3001
+      - POLICY_SERVICE_URL=http://policy-service:8080
+      - INVESTMENT_SERVICE_URL=http://investment-service:3002
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3003
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_SERVICE_NAME=chaos-controller
+    depends_on:
+      lgtm:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── frontend (React/Vite, port 5173) ─────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: insurewatch-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:3000
+      - VITE_OTEL_ENDPOINT=http://localhost:4318
+    volumes:
+      - ./frontend/src:/app/src
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+  lgtm-data:

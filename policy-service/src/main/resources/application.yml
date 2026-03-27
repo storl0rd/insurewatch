@@ -1,0 +1,21 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: policy-service
+  data:
+    mongodb:
+      uri: ${MONGODB_URL:mongodb://localhost:27017/insurewatch}
+      database: ${MONGO_DATABASE:insurewatch}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+logging:
+  level:
+    root: INFO
+    com.insurewatch: DEBUG
