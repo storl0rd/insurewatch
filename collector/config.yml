@@ -1,0 +1,41 @@
+# collector/config.yml — Reference collector config (used on main branch)
+#
+# This is provided as reference material only. The main branch sends
+# telemetry directly to the LGTM stack without a collector.
+# See lab/3-collector and lab/4-chaos for labs that use this middleware.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 64
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  otlphttp/lgtm:
+    endpoint: http://lgtm:4318
+
+service:
+  pipelines:
+    traces:
+      receivers:  [otlp]
+      processors: [memory_limiter, batch]
+      exporters:  [otlphttp/lgtm]
+    metrics:
+      receivers:  [otlp]
+      processors: [memory_limiter, batch]
+      exporters:  [otlphttp/lgtm]
+    logs:
+      receivers:  [otlp]
+      processors: [memory_limiter, batch]
+      exporters:  [otlphttp/lgtm]
