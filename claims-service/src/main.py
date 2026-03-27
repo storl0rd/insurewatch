@@ -14,13 +14,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from motor.motor_asyncio import AsyncIOMotorClient
 from opentelemetry import trace, metrics
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+# LAB 4 PROBLEM 2: FastAPIInstrumentor removed
+# TODO: from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 logger = logging.getLogger("claims-service")
 
 app = FastAPI(title="InsureWatch Claims Service", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-FastAPIInstrumentor.instrument_app(app)
+# LAB 4 PROBLEM 2: FastAPIInstrumentor.instrument_app(app) removed
+# TODO: FastAPIInstrumentor.instrument_app(app)
 
 # MongoDB
 MONGO_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
@@ -98,116 +101,102 @@ async def health():
 @app.post("/claims", response_model=ClaimResponse)
 async def submit_claim(claim: ClaimSubmission, request: Request):
     start = time.time()
-    with tracer.start_as_current_span("submit_claim") as span:
-        apply_chaos()
+    # LAB 4 PROBLEM 2: Manual span REMOVED
+    # TODO: add tracer.start_as_current_span("submit_claim") and set attributes
+    apply_chaos()
 
-        span.set_attribute("claim.customer_id",   claim.customer_id)
-        span.set_attribute("claim.type",          claim.claim_type)
-        span.set_attribute("claim.amount",        claim.amount)
-        span.set_attribute("claim.policy_number", claim.policy_number)
+    logger.info(f"Processing claim submission for customer {claim.customer_id}")
 
-        logger.info(f"Processing claim submission for customer {claim.customer_id}")
+    # Validate policy with Policy Service
+    policy_url = os.getenv("POLICY_SERVICE_URL", "http://localhost:8080")
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as http:
+            policy_resp = await http.get(f"{policy_url}/policy/{claim.customer_id}/coverage")
+            if policy_resp.status_code != 200:
+                raise HTTPException(status_code=400, detail="Policy not found or inactive")
+            policy_data = policy_resp.json()
+    except httpx.RequestError as e:
+        logger.error(f"Policy service unreachable: {e}")
+        logger.warning("Proceeding with claim despite policy service being unreachable")
 
-        # Validate policy with Policy Service
-        policy_url = os.getenv("POLICY_SERVICE_URL", "http://localhost:8080")
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as http:
-                policy_resp = await http.get(f"{policy_url}/policy/{claim.customer_id}/coverage")
-                if policy_resp.status_code != 200:
-                    raise HTTPException(status_code=400, detail="Policy not found or inactive")
-                policy_data = policy_resp.json()
-                span.set_attribute("policy.valid", True)
-                span.set_attribute("policy.coverage_limit", policy_data.get("coverage_limit", 0))
-        except httpx.RequestError as e:
-            logger.error(f"Policy service unreachable: {e}")
-            span.record_exception(e)
-            span.set_attribute("policy.valid", False)
-            # Continue with claim but flag it
-            logger.warning("Proceeding with claim despite policy service being unreachable")
+    # Determine claim status
+    status = "pending"
+    if claim.amount < 1000:
+        status = "auto_approved"
+        claims_approved.add(1, {"claim_type": claim.claim_type})
+    else:
+        claims_submitted.add(1, {"claim_type": claim.claim_type})
 
-        # Determine claim status
-        status = "pending"
-        if claim.amount < 1000:
-            status = "auto_approved"
-            claims_approved.add(1, {"claim_type": claim.claim_type})
-        else:
-            claims_submitted.add(1, {"claim_type": claim.claim_type})
+    # Persist to MongoDB
+    doc = {
+        "customer_id":   claim.customer_id,
+        "policy_number": claim.policy_number,
+        "claim_type":    claim.claim_type,
+        "amount":        claim.amount,
+        "description":   claim.description,
+        "incident_date": claim.incident_date,
+        "status":        status,
+        "submitted_at":  datetime.utcnow().isoformat(),
+    }
+    result = await claims_collection.insert_one(doc)
+    claim_id = str(result.inserted_id)
+    active_claims.add(1)
 
-        # Persist to MongoDB
-        doc = {
-            "customer_id":   claim.customer_id,
-            "policy_number": claim.policy_number,
-            "claim_type":    claim.claim_type,
-            "amount":        claim.amount,
-            "description":   claim.description,
-            "incident_date": claim.incident_date,
-            "status":        status,
-            "submitted_at":  datetime.utcnow().isoformat(),
-        }
-        result = await claims_collection.insert_one(doc)
-        claim_id = str(result.inserted_id)
-        span.set_attribute("claim.id",     claim_id)
-        span.set_attribute("claim.status", status)
-        active_claims.add(1)
+    # Notify notification service async
+    notification_url = os.getenv("NOTIFICATION_SERVICE_URL", "http://localhost:3003")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as http:
+            await http.post(f"{notification_url}/notify", json={
+                "customer_id": claim.customer_id,
+                "event":       "claim_submitted",
+                "claim_id":    claim_id,
+                "status":      status,
+            })
+    except Exception as e:
+        logger.warning(f"Notification service unreachable (non-fatal): {e}")
 
-        # Notify notification service async
-        notification_url = os.getenv("NOTIFICATION_SERVICE_URL", "http://localhost:3003")
-        try:
-            async with httpx.AsyncClient(timeout=3.0) as http:
-                await http.post(f"{notification_url}/notify", json={
-                    "customer_id": claim.customer_id,
-                    "event":       "claim_submitted",
-                    "claim_id":    claim_id,
-                    "status":      status,
-                })
-        except Exception as e:
-            logger.warning(f"Notification service unreachable (non-fatal): {e}")
+    duration_ms = (time.time() - start) * 1000
+    processing_time.record(duration_ms, {"claim_type": claim.claim_type, "status": status})
+    logger.info(f"Claim {claim_id} created with status {status}")
 
-        duration_ms = (time.time() - start) * 1000
-        processing_time.record(duration_ms, {"claim_type": claim.claim_type, "status": status})
-        logger.info(f"Claim {claim_id} created with status {status}", extra={"claim_id": claim_id})
-
-        return ClaimResponse(
-            claim_id=claim_id,
-            customer_id=claim.customer_id,
-            policy_number=claim.policy_number,
-            claim_type=claim.claim_type,
-            amount=claim.amount,
-            status=status,
-            submitted_at=doc["submitted_at"],
-            description=claim.description,
-        )
+    return ClaimResponse(
+        claim_id=claim_id,
+        customer_id=claim.customer_id,
+        policy_number=claim.policy_number,
+        claim_type=claim.claim_type,
+        amount=claim.amount,
+        status=status,
+        submitted_at=doc["submitted_at"],
+        description=claim.description,
+    )
 
 @app.get("/claims/{claim_id}")
 async def get_claim(claim_id: str):
-    with tracer.start_as_current_span("get_claim") as span:
-        apply_chaos()
-        span.set_attribute("claim.id", claim_id)
-        from bson import ObjectId
-        try:
-            doc = await claims_collection.find_one({"_id": ObjectId(claim_id)})
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid claim ID")
-        if not doc:
-            raise HTTPException(status_code=404, detail="Claim not found")
-        doc["claim_id"] = str(doc.pop("_id"))
-        return doc
+    # LAB 4 PROBLEM 2: Manual span REMOVED
+    apply_chaos()
+    from bson import ObjectId
+    try:
+        doc = await claims_collection.find_one({"_id": ObjectId(claim_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid claim ID")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    doc["claim_id"] = str(doc.pop("_id"))
+    return doc
 
 @app.get("/claims")
 async def list_claims(customer_id: Optional[str] = None):
-    with tracer.start_as_current_span("list_claims") as span:
-        apply_chaos()
-        query = {}
-        if customer_id:
-            query["customer_id"] = customer_id
-            span.set_attribute("filter.customer_id", customer_id)
-        cursor = claims_collection.find(query).limit(50)
-        results = []
-        async for doc in cursor:
-            doc["claim_id"] = str(doc.pop("_id"))
-            results.append(doc)
-        span.set_attribute("claims.count", len(results))
-        return results
+    # LAB 4 PROBLEM 2: Manual span REMOVED
+    apply_chaos()
+    query = {}
+    if customer_id:
+        query["customer_id"] = customer_id
+    cursor = claims_collection.find(query).limit(50)
+    results = []
+    async for doc in cursor:
+        doc["claim_id"] = str(doc.pop("_id"))
+        results.append(doc)
+    return results
 
 # ── Chaos endpoints ───────────────────────────────────────────────────────────
 @app.get("/chaos/state")

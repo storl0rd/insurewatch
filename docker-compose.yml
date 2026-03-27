@@ -1,8 +1,12 @@
 version: "3.9"
 
-# InsureWatch — local lab environment
-# Grafana LGTM stack on host port 3100 (avoids conflict with api-gateway on 3000)
-# OTLP gRPC: 4317 | OTLP HTTP: 4318 | Grafana UI: 3100
+# InsureWatch — LAB 4: Full chaos
+# Three problems to find and fix:
+#   1. collector/skeleton.yml is incomplete — no data reaches Grafana
+#   2. claims-service uses B3 propagator — traces break at gateway→claims boundary
+#   3. claims-service has no auto-instrumentation or manual spans
+#
+# Recommended order: fix collector → fix propagator → restore instrumentation
 
 services:
   # ── Observability stack ──────────────────────────────────────────────────────
@@ -11,8 +15,6 @@ services:
     container_name: insurewatch-lgtm
     ports:
       - "3100:3000"   # Grafana UI
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
@@ -23,6 +25,21 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  # ── OTel Collector — skeleton config, pipeline incomplete ────────────────────
+  collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: insurewatch-collector
+    command: ["--config=/etc/otelcol/config.yml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./collector/skeleton.yml:/etc/otelcol/config.yml:ro
+    depends_on:
+      lgtm:
+        condition: service_healthy
+    restart: unless-stopped
 
   # ── Database ─────────────────────────────────────────────────────────────────
   mongodb:
@@ -38,7 +55,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── api-gateway (Node.js, port 3000) ─────────────────────────────────────────
   api-gateway:
     build: ./api-gateway
     container_name: insurewatch-api-gateway
@@ -51,14 +67,12 @@ services:
       - INVESTMENT_SERVICE_URL=http://investment-service:3002
       - NOTIFICATION_SERVICE_URL=http://notification-service:3003
       - CHAOS_CONTROLLER_URL=http://chaos-controller:3004
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318
       - OTEL_SERVICE_NAME=api-gateway
     depends_on:
-      lgtm:
-        condition: service_healthy
+      - collector
     restart: unless-stopped
 
-  # ── claims-service (Python/FastAPI, port 3001) ───────────────────────────────
   claims-service:
     build: ./claims-service
     container_name: insurewatch-claims
@@ -69,17 +83,16 @@ services:
       - MONGODB_URL=mongodb://mongodb:27017
       - POLICY_SERVICE_URL=http://policy-service:8080
       - NOTIFICATION_SERVICE_URL=http://notification-service:3003
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318
       - OTEL_SERVICE_NAME=claims-service
       - ENVIRONMENT=local
     depends_on:
       mongodb:
         condition: service_healthy
-      lgtm:
-        condition: service_healthy
+      collector:
+        condition: service_started
     restart: unless-stopped
 
-  # ── policy-service (Java/Spring Boot, port 8080) ─────────────────────────────
   policy-service:
     build: ./policy-service
     container_name: insurewatch-policy
@@ -89,17 +102,16 @@ services:
       - PORT=8080
       - MONGODB_URL=mongodb://mongodb:27017/insurewatch
       - MONGO_DATABASE=insurewatch
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318
       - OTEL_SERVICE_NAME=policy-service
       - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
     depends_on:
       mongodb:
         condition: service_healthy
-      lgtm:
-        condition: service_healthy
+      collector:
+        condition: service_started
     restart: unless-stopped
 
-  # ── investment-service (Node.js, port 3002) ───────────────────────────────────
   investment-service:
     build: ./investment-service
     container_name: insurewatch-investment
@@ -108,16 +120,15 @@ services:
     environment:
       - PORT=3002
       - MONGODB_URL=mongodb://mongodb:27017/insurewatch
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318
       - OTEL_SERVICE_NAME=investment-service
     depends_on:
       mongodb:
         condition: service_healthy
-      lgtm:
-        condition: service_healthy
+      collector:
+        condition: service_started
     restart: unless-stopped
 
-  # ── notification-service (Python/FastAPI, port 3003) ─────────────────────────
   notification-service:
     build: ./notification-service
     container_name: insurewatch-notification
@@ -125,15 +136,13 @@ services:
       - "3003:3003"
     environment:
       - PORT=3003
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318
       - OTEL_SERVICE_NAME=notification-service
       - ENVIRONMENT=local
     depends_on:
-      lgtm:
-        condition: service_healthy
+      - collector
     restart: unless-stopped
 
-  # ── chaos-controller (Node.js, port 3004) ────────────────────────────────────
   chaos-controller:
     build: ./chaos-controller
     container_name: insurewatch-chaos
@@ -145,14 +154,12 @@ services:
       - POLICY_SERVICE_URL=http://policy-service:8080
       - INVESTMENT_SERVICE_URL=http://investment-service:3002
       - NOTIFICATION_SERVICE_URL=http://notification-service:3003
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318
       - OTEL_SERVICE_NAME=chaos-controller
     depends_on:
-      lgtm:
-        condition: service_healthy
+      - collector
     restart: unless-stopped
 
-  # ── frontend (React/Vite, port 5173) ─────────────────────────────────────────
   frontend:
     build:
       context: ./frontend

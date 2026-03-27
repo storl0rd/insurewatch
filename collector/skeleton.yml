@@ -1,0 +1,46 @@
+# collector/skeleton.yml — LAB 4 STARTING POINT
+#
+# LAB 4 PROBLEM 3: Complete this collector config.
+#
+# The collector container is running but has no valid pipeline.
+# All services send telemetry to http://collector:4318 — but nothing
+# flows through to Grafana until you define receivers, processors,
+# exporters, and service pipelines.
+#
+# Suggested order for Lab 4:
+#   1. Fix this collector config first (get data flowing)
+#   2. Fix the propagator mismatch in claims-service/src/instrumentation.py
+#   3. Restore auto-instrumentation in claims-service
+#
+# Steps to complete this file:
+#   - Define an otlp receiver (grpc: 4317, http: 4318)
+#   - Add memory_limiter processor (must be FIRST in pipeline)
+#   - Add batch processor
+#   - Add otlphttp/lgtm exporter pointing to http://lgtm:4318
+#   - Wire all three signals (traces, metrics, logs) in service.pipelines
+#   - Restart: docker compose restart collector
+#   - Verify in Grafana: http://localhost:3100
+
+receivers:
+  # TODO
+
+processors:
+  # TODO
+
+exporters:
+  # TODO
+
+service:
+  pipelines:
+    traces:
+      receivers:  []
+      processors: []
+      exporters:  []
+    metrics:
+      receivers:  []
+      processors: []
+      exporters:  []
+    logs:
+      receivers:  []
+      processors: []
+      exporters:  []
